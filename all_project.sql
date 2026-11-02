@@ -26,8 +26,4 @@ FROM project_info AS pjf
 WHERE
     (operational_state.status IS NULL
    OR operational_state.status != 'suspended')
-#    AND
-#     project_code = 'CLW_[P33C_Low](HEV_MR20k)'
-#     AND destination = 'US/CAN'
-#     AND body_type = 'CrossoverSUV'
 ORDER BY pjf.id DESC, phase_id;
