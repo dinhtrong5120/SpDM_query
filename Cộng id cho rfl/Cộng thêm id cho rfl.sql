@@ -1,0 +1,35 @@
+-- 1. Tìm tất cả bảng FK tới rfl(id)
+SELECT
+    TABLE_NAME,
+    COLUMN_NAME,
+    CONSTRAINT_NAME
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE REFERENCED_TABLE_SCHEMA = DATABASE()
+  AND REFERENCED_TABLE_NAME = 'rfl'
+  AND REFERENCED_COLUMN_NAME = 'id';
+
+-- 2. Generate update cho tất cả bảng con
+SELECT CONCAT(
+    'UPDATE `', TABLE_NAME, '` ',
+    'SET `', COLUMN_NAME, '` = `', COLUMN_NAME, '` + 1000000 ',
+    'WHERE `', COLUMN_NAME, '` >= 13699;'
+) AS update_sql
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE REFERENCED_TABLE_SCHEMA = DATABASE()
+  AND REFERENCED_TABLE_NAME = 'rfl'
+  AND REFERENCED_COLUMN_NAME = 'id';
+
+-- 3. Chạy transaction:
+SET SQL_SAFE_UPDATES = 0;
+START TRANSACTION;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- paste các UPDATE bảng con vào đây
+
+UPDATE rfl
+SET id = id + 1000000
+WHERE id >= 13699;
+
+SET FOREIGN_KEY_CHECKS = 1;
+COMMIT;
+SET SQL_SAFE_UPDATES = 1;
