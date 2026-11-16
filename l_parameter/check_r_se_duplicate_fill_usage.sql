@@ -3,26 +3,43 @@
 -- Run Query 2 to export duplicate IDs plus project/phase usage.
 -- SE and R are grouped separately, active parameters only.
 -- Compare display units via units.unit, not se.parameter_unit / r.unit.
+-- Export only: SQL NULL becomes literal text 'null'; empty strings stay empty.
+-- Duplicate comparison keys are unchanged: NULL and empty strings remain equivalent.
+-- Nullable numeric export columns are text to support the literal 'null'.
 -- duplicate_count counts distinct master parameter IDs, NOT parameter/variation rows.
--- Scope: all active master parameters, including unused master IDs.
+-- Scope: active master parameters linked to existing projects only.
+-- Filter unused IDs BEFORE grouping; each duplicate group needs at least two used IDs.
+-- hierarchy is display-only and is NOT part of the duplicate comparison key.
 
 -- QUERY 1: DUPLICATE PARAMETERS
 WITH parameter_master AS (
     SELECT 'SE' AS parameter_type, m.id AS parameter_id,
            wp.wp, m.parameter_name_1 AS category, m.parameter_name_2 AS parameter_name,
            NULL AS performance, NULL AS design_item_1, NULL AS design_item_2,
-           NULL AS design_item_3, u.unit
+           NULL AS design_item_3, u.unit, h.hierarchy
     FROM se_parameter m
     LEFT JOIN wp ON wp.id=m.wp_id
     LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
     WHERE m.is_active=1
+      AND EXISTS (
+          SELECT 1 FROM project_parameter p
+          JOIN project_info pi ON pi.id=p.project_id
+          WHERE p.se_parameter_id=m.id
+      )
     UNION ALL
     SELECT 'R', m.id, wp.wp, NULL, NULL, m.performance,
-           m.design_item_1, m.design_item_2, m.design_item_3, u.unit
+           m.design_item_1, m.design_item_2, m.design_item_3, u.unit, h.hierarchy
     FROM r_parameter m
     LEFT JOIN wp ON wp.id=m.wp_id
     LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
     WHERE m.is_active=1
+      AND EXISTS (
+          SELECT 1 FROM project_r_parameter p
+          JOIN project_info pi ON pi.id=p.project_id
+          WHERE p.r_parameter_id=m.id
+      )
 ), normalized AS (
     SELECT parameter_master.*,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(wp, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS wp_key,
@@ -54,8 +71,8 @@ WITH parameter_master AS (
     SELECT * FROM ranked WHERE duplicate_count>1
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       d.wp, d.category, d.parameter_name, d.performance,
-       d.design_item_1, d.design_item_2, d.design_item_3, d.unit
+       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
+       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy
 FROM duplicates d
 ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id;
 
@@ -64,18 +81,30 @@ WITH parameter_master AS (
     SELECT 'SE' AS parameter_type, m.id AS parameter_id,
            wp.wp, m.parameter_name_1 AS category, m.parameter_name_2 AS parameter_name,
            NULL AS performance, NULL AS design_item_1, NULL AS design_item_2,
-           NULL AS design_item_3, u.unit
+           NULL AS design_item_3, u.unit, h.hierarchy
     FROM se_parameter m
     LEFT JOIN wp ON wp.id=m.wp_id
     LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
     WHERE m.is_active=1
+      AND EXISTS (
+          SELECT 1 FROM project_parameter p
+          JOIN project_info pi ON pi.id=p.project_id
+          WHERE p.se_parameter_id=m.id
+      )
     UNION ALL
     SELECT 'R', m.id, wp.wp, NULL, NULL, m.performance,
-           m.design_item_1, m.design_item_2, m.design_item_3, u.unit
+           m.design_item_1, m.design_item_2, m.design_item_3, u.unit, h.hierarchy
     FROM r_parameter m
     LEFT JOIN wp ON wp.id=m.wp_id
     LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
     WHERE m.is_active=1
+      AND EXISTS (
+          SELECT 1 FROM project_r_parameter p
+          JOIN project_info pi ON pi.id=p.project_id
+          WHERE p.r_parameter_id=m.id
+      )
 ), normalized AS (
     SELECT parameter_master.*,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(wp, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS wp_key,
@@ -110,20 +139,22 @@ WITH parameter_master AS (
     SELECT 'SE' AS parameter_type,p.se_parameter_id AS parameter_id,
            p.project_id,p.phase_id,COUNT(DISTINCT p.variation_id) AS variation_count
     FROM project_parameter p
+    JOIN project_info pi ON pi.id=p.project_id
     GROUP BY p.se_parameter_id,p.project_id,p.phase_id
     UNION ALL
     SELECT 'R',p.r_parameter_id,p.project_id,p.phase_id,COUNT(DISTINCT p.variation_id)
     FROM project_r_parameter p
+    JOIN project_info pi ON pi.id=p.project_id
     GROUP BY p.r_parameter_id,p.project_id,p.phase_id
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       d.wp, d.category, d.parameter_name, d.performance,
-       d.design_item_1, d.design_item_2, d.design_item_3, d.unit,
-       x.project_id,pi.project_code,dest.destination,dt.drivetrain,
-       a.architecturename AS powertrain,l.lot,bt.body_type,
-       x.phase_id,ph.phase,x.variation_count
+       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
+       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       COALESCE(CAST(x.project_id AS CHAR), 'null') AS project_id,COALESCE(pi.project_code, 'null') AS project_code,COALESCE(dest.destination, 'null') AS destination,COALESCE(dt.drivetrain, 'null') AS drivetrain,
+       COALESCE(a.architecturename, 'null') AS powertrain,COALESCE(l.lot, 'null') AS lot,COALESCE(bt.body_type, 'null') AS body_type,
+       COALESCE(CAST(x.phase_id AS CHAR), 'null') AS phase_id,COALESCE(ph.phase, 'null') AS phase,COALESCE(CAST(x.variation_count AS CHAR), 'null') AS variation_count
 FROM duplicates d
-LEFT JOIN usage_scopes x ON x.parameter_type=d.parameter_type AND x.parameter_id=d.parameter_id
+JOIN usage_scopes x ON x.parameter_type=d.parameter_type AND x.parameter_id=d.parameter_id
 LEFT JOIN project_info pi ON pi.id=x.project_id
 LEFT JOIN setup s ON s.id=pi.setup_id
 LEFT JOIN destination dest ON dest.id=s.destination_id
