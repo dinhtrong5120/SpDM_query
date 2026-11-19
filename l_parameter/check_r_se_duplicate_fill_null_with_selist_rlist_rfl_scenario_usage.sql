@@ -1,0 +1,336 @@
+-- Query 3 also adds is_used_in_project_selist: YES/NO for SE, N/A for R.
+-- SE-list usage requires a project_parameter row linked to an existing project_info.
+-- Like the other usage flags, it is global for the exact ID and does not affect duplicate grouping.
+-- Added usage flags (YES/NO); neither flag participates in duplicate grouping.
+-- Flags are global for the exact parameter ID across ALL projects, not just x.project_id/phase_id.
+-- Project RFL requires an existing project_info + prj_rfl link, not just an RFL master row.
+-- R: Requirement via setup_r_relation; also Allocation via l_r_relation.
+-- SE: Logic via setup_l_relation -> l_parameter.related_se_parameter_id.
+-- Scenario Master: R uses rflcategory='R'/rflid; SE uses category='SE'/parent_id.
+-- Scenario checks include active AND inactive rows; they still retain a reference.
+-- These flags do not claim that an ID is safe to delete: other reference tables may exist.
+-- MySQL 8.0+. READ ONLY: three independent SELECT queries, no schema/data writes.
+-- Run Query 1 to export duplicate parameter IDs and fields.
+-- Run Query 2 to export duplicate IDs plus project/phase usage.
+-- Run Query 3 for Query 1 columns plus is_used_in_project_rlist (YES/NO for R, N/A for SE).
+-- SE and R are grouped separately, active parameters only.
+-- Compare display units via units.unit, not se.parameter_unit / r.unit.
+-- Export only: SQL NULL becomes literal text 'null'; empty strings stay empty.
+-- Duplicate comparison keys are unchanged: NULL and empty strings remain equivalent.
+-- Nullable numeric export columns are text to support the literal 'null'.
+-- duplicate_count counts distinct master parameter IDs, NOT parameter/variation rows.
+-- Scope: all active master parameters, including unused master IDs.
+-- hierarchy is display-only and is NOT part of the duplicate comparison key.
+
+-- QUERY 1: DUPLICATE PARAMETERS
+WITH parameter_master AS (
+    SELECT 'SE' AS parameter_type, m.id AS parameter_id,
+           wp.wp, m.parameter_name_1 AS category, m.parameter_name_2 AS parameter_name,
+           NULL AS performance, NULL AS design_item_1, NULL AS design_item_2,
+           NULL AS design_item_3, u.unit, h.hierarchy
+    FROM se_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+    UNION ALL
+    SELECT 'R', m.id, wp.wp, NULL, NULL, m.performance,
+           m.design_item_1, m.design_item_2, m.design_item_3, u.unit, h.hierarchy
+    FROM r_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+), normalized AS (
+    SELECT parameter_master.*,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(wp, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS wp_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(category, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS category_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(parameter_name, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS parameter_name_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(performance, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS performance_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_1, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_1_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_2, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_2_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_3, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_3_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key
+    FROM parameter_master
+), signatures AS (
+    SELECT normalized.*,
+           CASE WHEN parameter_type='SE'
+                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key)
+                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
+                               design_item_2_key,design_item_3_key,unit_key)
+           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    FROM normalized
+    WHERE (parameter_type='SE' AND parameter_name_key<>'')
+       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
+                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
+), ranked AS (
+    SELECT signatures.*,
+           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+    FROM signatures
+), duplicates AS (
+    SELECT * FROM ranked WHERE duplicate_count>1
+)
+SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
+       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
+       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN rfl rf ON rf.requirement_s_id=sr.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) OR EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN l_r_relation lr ON lr.r_s_id=sr.id
+               JOIN rfl rf ON rf.logic_s_id=lr.l_s_id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM l_parameter lp
+               JOIN setup_l_relation sl ON sl.l_parameter_id=lp.id
+               JOIN rfl rf ON rf.logic_s_id=sl.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE lp.related_se_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_project_rfl,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.rflcategory='R' AND sc.rflid=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.category='SE' AND sc.parent_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_scenario_master
+FROM duplicates d
+ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id;
+
+-- QUERY 2: PROJECT/PHASE USAGE
+WITH parameter_master AS (
+    SELECT 'SE' AS parameter_type, m.id AS parameter_id,
+           wp.wp, m.parameter_name_1 AS category, m.parameter_name_2 AS parameter_name,
+           NULL AS performance, NULL AS design_item_1, NULL AS design_item_2,
+           NULL AS design_item_3, u.unit, h.hierarchy
+    FROM se_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+    UNION ALL
+    SELECT 'R', m.id, wp.wp, NULL, NULL, m.performance,
+           m.design_item_1, m.design_item_2, m.design_item_3, u.unit, h.hierarchy
+    FROM r_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+), normalized AS (
+    SELECT parameter_master.*,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(wp, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS wp_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(category, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS category_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(parameter_name, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS parameter_name_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(performance, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS performance_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_1, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_1_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_2, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_2_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_3, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_3_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key
+    FROM parameter_master
+), signatures AS (
+    SELECT normalized.*,
+           CASE WHEN parameter_type='SE'
+                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key)
+                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
+                               design_item_2_key,design_item_3_key,unit_key)
+           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    FROM normalized
+    WHERE (parameter_type='SE' AND parameter_name_key<>'')
+       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
+                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
+), ranked AS (
+    SELECT signatures.*,
+           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+    FROM signatures
+), duplicates AS (
+    SELECT * FROM ranked WHERE duplicate_count>1
+)
+, usage_scopes AS (
+    SELECT 'SE' AS parameter_type,p.se_parameter_id AS parameter_id,
+           p.project_id,p.phase_id,COUNT(DISTINCT p.variation_id) AS variation_count
+    FROM project_parameter p
+    GROUP BY p.se_parameter_id,p.project_id,p.phase_id
+    UNION ALL
+    SELECT 'R',p.r_parameter_id,p.project_id,p.phase_id,COUNT(DISTINCT p.variation_id)
+    FROM project_r_parameter p
+    GROUP BY p.r_parameter_id,p.project_id,p.phase_id
+)
+SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
+       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
+       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN rfl rf ON rf.requirement_s_id=sr.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) OR EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN l_r_relation lr ON lr.r_s_id=sr.id
+               JOIN rfl rf ON rf.logic_s_id=lr.l_s_id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM l_parameter lp
+               JOIN setup_l_relation sl ON sl.l_parameter_id=lp.id
+               JOIN rfl rf ON rf.logic_s_id=sl.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE lp.related_se_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_project_rfl,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.rflcategory='R' AND sc.rflid=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.category='SE' AND sc.parent_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_scenario_master,
+       COALESCE(CAST(x.project_id AS CHAR), 'null') AS project_id,COALESCE(pi.project_code, 'null') AS project_code,COALESCE(dest.destination, 'null') AS destination,COALESCE(dt.drivetrain, 'null') AS drivetrain,
+       COALESCE(a.architecturename, 'null') AS powertrain,COALESCE(l.lot, 'null') AS lot,COALESCE(bt.body_type, 'null') AS body_type,
+       COALESCE(CAST(x.phase_id AS CHAR), 'null') AS phase_id,COALESCE(ph.phase, 'null') AS phase,COALESCE(CAST(x.variation_count AS CHAR), 'null') AS variation_count
+FROM duplicates d
+LEFT JOIN usage_scopes x ON x.parameter_type=d.parameter_type AND x.parameter_id=d.parameter_id
+LEFT JOIN project_info pi ON pi.id=x.project_id
+LEFT JOIN setup s ON s.id=pi.setup_id
+LEFT JOIN destination dest ON dest.id=s.destination_id
+LEFT JOIN drivetrain dt ON dt.id=s.drivetrain_id
+LEFT JOIN architecture a ON a.id=s.architecture_id
+LEFT JOIN lot l ON l.id=pi.lot_id
+LEFT JOIN body_type bt ON bt.id=s.body_type_id
+LEFT JOIN phase ph ON ph.id=x.phase_id
+ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id,x.project_id,x.phase_id;
+
+-- R-list usage is global for this exact R ID across all projects/phases/variations.
+-- YES: at least one project_r_parameter row linked to an existing project_info.
+-- NO: no such R-list usage. SE uses N/A (not a member of R-list).
+-- This flag does not filter results or participate in duplicate grouping.
+-- QUERY 3: DUPLICATE PARAMETERS WITH PROJECT SE-LIST AND R-LIST USAGE
+WITH parameter_master AS (
+    SELECT 'SE' AS parameter_type, m.id AS parameter_id,
+           wp.wp, m.parameter_name_1 AS category, m.parameter_name_2 AS parameter_name,
+           NULL AS performance, NULL AS design_item_1, NULL AS design_item_2,
+           NULL AS design_item_3, u.unit, h.hierarchy
+    FROM se_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+    UNION ALL
+    SELECT 'R', m.id, wp.wp, NULL, NULL, m.performance,
+           m.design_item_1, m.design_item_2, m.design_item_3, u.unit, h.hierarchy
+    FROM r_parameter m
+    LEFT JOIN wp ON wp.id=m.wp_id
+    LEFT JOIN units u ON u.id=m.unit_id
+    LEFT JOIN hierarchy h ON h.id=m.hierarchy_id
+    WHERE m.is_active=1
+), normalized AS (
+    SELECT parameter_master.*,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(wp, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS wp_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(category, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS category_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(parameter_name, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS parameter_name_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(performance, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS performance_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_1, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_1_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_2, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_2_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_3, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_3_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key
+    FROM parameter_master
+), signatures AS (
+    SELECT normalized.*,
+           CASE WHEN parameter_type='SE'
+                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key)
+                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
+                               design_item_2_key,design_item_3_key,unit_key)
+           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    FROM normalized
+    WHERE (parameter_type='SE' AND parameter_name_key<>'')
+       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
+                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
+), ranked AS (
+    SELECT signatures.*,
+           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+    FROM signatures
+), duplicates AS (
+    SELECT * FROM ranked WHERE duplicate_count>1
+)
+SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
+       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
+       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN rfl rf ON rf.requirement_s_id=sr.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) OR EXISTS (
+               SELECT 1 FROM setup_r_relation sr
+               JOIN l_r_relation lr ON lr.r_s_id=sr.id
+               JOIN rfl rf ON rf.logic_s_id=lr.l_s_id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE sr.r_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM l_parameter lp
+               JOIN setup_l_relation sl ON sl.l_parameter_id=lp.id
+               JOIN rfl rf ON rf.logic_s_id=sl.id
+               JOIN prj_rfl pr ON pr.rfl_id=rf.id
+               JOIN project_info pi_rfl ON pi_rfl.id=pr.project_info_id
+               WHERE lp.related_se_parameter_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_project_rfl,
+       CASE WHEN d.parameter_type='R' THEN
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.rflcategory='R' AND sc.rflid=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       ELSE
+           CASE WHEN EXISTS (
+               SELECT 1 FROM test_senario_list_parameter sc
+               WHERE sc.category='SE' AND sc.parent_id=d.parameter_id
+           ) THEN 'YES' ELSE 'NO' END
+       END AS is_used_in_scenario_master,
+       CASE WHEN d.parameter_type='SE' THEN 'N/A'
+            WHEN EXISTS (
+                SELECT 1 FROM project_r_parameter rp
+                JOIN project_info pi_rlist ON pi_rlist.id=rp.project_id
+                WHERE rp.r_parameter_id=d.parameter_id
+            ) THEN 'YES' ELSE 'NO'
+       END AS is_used_in_project_rlist,
+       CASE WHEN d.parameter_type='R' THEN 'N/A'
+            WHEN EXISTS (
+                SELECT 1 FROM project_parameter sp
+                JOIN project_info pi_selist ON pi_selist.id=sp.project_id
+                WHERE sp.se_parameter_id=d.parameter_id
+            ) THEN 'YES' ELSE 'NO'
+       END AS is_used_in_project_selist
+FROM duplicates d
+ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id;
