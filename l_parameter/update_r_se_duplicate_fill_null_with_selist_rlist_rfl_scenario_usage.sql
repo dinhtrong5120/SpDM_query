@@ -20,9 +20,9 @@
 -- Errors roll back BOTH master UPDATEs. Rerunning after success finds no duplicates and is a no-op.
 -- Existing A_ is reserved: the algorithm tries additional underscores until the entire tuple is unique.
 
-SET @execute = 0;
+SET @execute = 1;
 SET @suffix_character = '_';
-SET @confirmation = NULL; -- Copy expected_confirmation from preview; then set @execute=1 and rerun.
+SET @confirmation = 'UPDATE_DUPLICATES spdm R:51083,R:210004,R:210011,R:290130,R:290131,R:290464,R:290594,R:290645,R:290646,R:290647,R:290648,R:290649,R:290650,R:290957,R:290958,R:1040015,R:1040032,R:1040033,R:1040034,R:123123311,R:123123312,R:123123352,R:123123353,SE:783,SE:818,SE:819,SE:820,SE:1451,SE:1489,SE:1578'; -- Copy expected_confirmation from preview; then set @execute=1 and rerun.
 
 -- Remove only this script's helper if an earlier failed call left it behind.
 DROP PROCEDURE IF EXISTS spdm_apply_duplicate_parameter_suffix_20261119;

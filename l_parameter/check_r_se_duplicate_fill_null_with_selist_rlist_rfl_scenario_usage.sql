@@ -315,3 +315,6 @@ SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id
        END AS is_used_in_project_selist
 FROM duplicates d
 ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id;
+
+# UPDATE_DUPLICATES spdm R:51083,R:210004,R:210011,R:290130,R:290131,R:290464,R:290594,R:290645,R:290646,R:290647,R:290648,R:290649,R:290650,R:290957,R:290958,R:1040015,R:1040032,R:1040033,R:1040034,R:123123311,R:123123312,R:123123352,R:123123353,SE:783,SE:818,SE:819,SE:820,SE:1451,SE:1489,SE:1578
+select * from r_parameter where id = 210004;
