@@ -5,7 +5,7 @@
 -- Compare display units via units.unit, not se.parameter_unit / r.unit.
 -- duplicate_count counts distinct master parameter IDs, NOT parameter/variation rows.
 -- Scope: all active master parameters, including unused master IDs.
--- hierarchy is display-only and is NOT part of the duplicate comparison key.
+-- hierarchy participates in both SE and R duplicate keys (same NULL/trim/lower normalization).
 
 -- QUERY 1: DUPLICATE PARAMETERS
 WITH parameter_master AS (
@@ -35,14 +35,15 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_1, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_1_key,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_2, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_2_key,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_3, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_3_key,
-           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
     SELECT normalized.*,
            CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key)
+                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
                 ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key)
+                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
            END COLLATE utf8mb4_0900_bin AS duplicate_key
     FROM normalized
     WHERE (parameter_type='SE' AND parameter_name_key<>'')
@@ -90,14 +91,15 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_1, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_1_key,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_2, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_2_key,
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(design_item_3, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS design_item_3_key,
-           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(unit, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS unit_key,
+           LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
     SELECT normalized.*,
            CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key)
+                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
                 ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key)
+                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
            END COLLATE utf8mb4_0900_bin AS duplicate_key
     FROM normalized
     WHERE (parameter_type='SE' AND parameter_name_key<>'')
