@@ -1,3 +1,5 @@
+-- Compare normalized fields directly (no concatenated/JSON key); NULL and empty strings are equivalent.
+-- Includes blank/null parameter names; uniqueness covers ALL active masters.
 -- Query 3 also adds is_used_in_project_selist: YES/NO for SE, N/A for R.
 -- SE-list usage requires a project_parameter row linked to an existing project_info.
 -- Like the other usage flags, it is global for the exact ID and does not affect duplicate grouping.
@@ -15,12 +17,12 @@
 -- Run Query 3 for Query 1 columns plus is_used_in_project_rlist (YES/NO for R, N/A for SE).
 -- SE and R are grouped separately, active parameters only.
 -- Compare display units via units.unit, not se.parameter_unit / r.unit.
--- Export only: SQL NULL becomes literal text 'null'; empty strings stay empty.
--- Duplicate comparison keys are unchanged: NULL and empty strings remain equivalent.
--- Nullable numeric export columns are text to support the literal 'null'.
+-- Comparison: SQL NULL becomes ''. Exported text: SQL NULL becomes '-'; empty strings stay empty.
+-- NULL and empty strings are equivalent in duplicate comparison.
+-- Nullable numeric export columns are text to support the literal '-'.
 -- duplicate_count counts distinct master parameter IDs, NOT parameter/variation rows.
 -- Scope: all active master parameters, including unused master IDs.
--- hierarchy participates in both SE and R duplicate keys (same NULL/trim/lower normalization).
+-- hierarchy participates in both SE and R duplicate keys (NULL -> '', trim/lower).
 
 -- QUERY 1: DUPLICATE PARAMETERS
 WITH parameter_master AS (
@@ -54,27 +56,19 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
-       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy,
        CASE WHEN d.parameter_type='R' THEN
            CASE WHEN EXISTS (
                SELECT 1 FROM setup_r_relation sr
@@ -146,20 +140,12 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
@@ -175,8 +161,8 @@ WITH parameter_master AS (
     GROUP BY p.r_parameter_id,p.project_id,p.phase_id
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
-       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy,
        CASE WHEN d.parameter_type='R' THEN
            CASE WHEN EXISTS (
                SELECT 1 FROM setup_r_relation sr
@@ -213,9 +199,9 @@ SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id
                WHERE sc.category='SE' AND sc.parent_id=d.parameter_id
            ) THEN 'YES' ELSE 'NO' END
        END AS is_used_in_scenario_master,
-       COALESCE(CAST(x.project_id AS CHAR), 'null') AS project_id,COALESCE(pi.project_code, 'null') AS project_code,COALESCE(dest.destination, 'null') AS destination,COALESCE(dt.drivetrain, 'null') AS drivetrain,
-       COALESCE(a.architecturename, 'null') AS powertrain,COALESCE(l.lot, 'null') AS lot,COALESCE(bt.body_type, 'null') AS body_type,
-       COALESCE(CAST(x.phase_id AS CHAR), 'null') AS phase_id,COALESCE(ph.phase, 'null') AS phase,COALESCE(CAST(x.variation_count AS CHAR), 'null') AS variation_count
+       COALESCE(CAST(x.project_id AS CHAR), '-') AS project_id,COALESCE(pi.project_code, '-') AS project_code,COALESCE(dest.destination, '-') AS destination,COALESCE(dt.drivetrain, '-') AS drivetrain,
+       COALESCE(a.architecturename, '-') AS powertrain,COALESCE(l.lot, '-') AS lot,COALESCE(bt.body_type, '-') AS body_type,
+       COALESCE(CAST(x.phase_id AS CHAR), '-') AS phase_id,COALESCE(ph.phase, '-') AS phase,COALESCE(CAST(x.variation_count AS CHAR), '-') AS variation_count
 FROM duplicates d
 LEFT JOIN usage_scopes x ON x.parameter_type=d.parameter_type AND x.parameter_id=d.parameter_id
 LEFT JOIN project_info pi ON pi.id=x.project_id
@@ -264,27 +250,19 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
-       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy,
        CASE WHEN d.parameter_type='R' THEN
            CASE WHEN EXISTS (
                SELECT 1 FROM setup_r_relation sr

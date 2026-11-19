@@ -1,3 +1,5 @@
+-- Compare normalized fields directly (no concatenated/JSON key); NULL and empty strings are equivalent.
+-- Includes blank/null parameter names; uniqueness covers ALL active masters.
 -- MySQL 8.0+. READ ONLY: two independent SELECT queries, no schema/data writes.
 -- Run Query 1 to export duplicate parameter IDs and fields.
 -- Run Query 2 to export duplicate IDs plus project/phase usage.
@@ -5,7 +7,7 @@
 -- Compare display units via units.unit, not se.parameter_unit / r.unit.
 -- duplicate_count counts distinct master parameter IDs, NOT parameter/variation rows.
 -- Scope: all active master parameters, including unused master IDs.
--- hierarchy participates in both SE and R duplicate keys (same NULL/trim/lower normalization).
+-- hierarchy participates in both SE and R duplicate keys (NULL -> '', trim/lower).
 
 -- QUERY 1: DUPLICATE PARAMETERS
 WITH parameter_master AS (
@@ -39,27 +41,19 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       d.wp, d.category, d.parameter_name, d.performance,
-       d.design_item_1, d.design_item_2, d.design_item_3, d.unit, d.hierarchy
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy
 FROM duplicates d
 ORDER BY d.parameter_type,d.duplicate_group_id,d.parameter_id;
 
@@ -95,20 +89,12 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
@@ -124,11 +110,11 @@ WITH parameter_master AS (
     GROUP BY p.r_parameter_id,p.project_id,p.phase_id
 )
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       d.wp, d.category, d.parameter_name, d.performance,
-       d.design_item_1, d.design_item_2, d.design_item_3, d.unit, d.hierarchy,
-       x.project_id,pi.project_code,dest.destination,dt.drivetrain,
-       a.architecturename AS powertrain,l.lot,bt.body_type,
-       x.phase_id,ph.phase,x.variation_count
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy,
+       COALESCE(CAST(x.project_id AS CHAR), '-') AS project_id,COALESCE(pi.project_code, '-') AS project_code,COALESCE(dest.destination, '-') AS destination,COALESCE(dt.drivetrain, '-') AS drivetrain,
+       COALESCE(a.architecturename, '-') AS powertrain,COALESCE(l.lot, '-') AS lot,COALESCE(bt.body_type, '-') AS body_type,
+       COALESCE(CAST(x.phase_id AS CHAR), '-') AS phase_id,COALESCE(ph.phase, '-') AS phase,COALESCE(CAST(x.variation_count AS CHAR), '-') AS variation_count
 FROM duplicates d
 LEFT JOIN usage_scopes x ON x.parameter_type=d.parameter_type AND x.parameter_id=d.parameter_id
 LEFT JOIN project_info pi ON pi.id=x.project_id

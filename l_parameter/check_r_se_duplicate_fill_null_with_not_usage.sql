@@ -1,3 +1,5 @@
+-- Compare normalized fields directly (no concatenated/JSON key); NULL and empty strings are equivalent.
+-- Includes blank/null parameter names; uniqueness covers ALL active masters.
 -- MySQL 8.0+. READ ONLY: one SELECT, no data/schema writes.
 -- Source: QUERY 3 in check_r_se_duplicate_fill_null_with_selist_rlist_rfl_scenario_usage.sql.
 -- Return active duplicate parameter IDs unused in ALL applicable usage categories:
@@ -9,7 +11,7 @@
 -- Duplicate grouping is computed BEFORE the unused filter. A used peer may be hidden.
 -- duplicate_count/group_id describe the full active group, not just the returned unused IDs.
 -- Duplicate comparison includes hierarchy, as in the updated source QUERY 3:
--- comparison treats NULL and empty alike; output shows NULL as 'null', preserves empty strings.
+-- comparison treats NULL as ''; output shows NULL as '-'; empty strings stay empty.
 -- hierarchy participates in SE/R duplicate keys; units come from units.unit via unit_id.
 -- NO flags do NOT prove safe deletion: other master/history/reference tables are not checked.
 
@@ -44,27 +46,19 @@ WITH parameter_master AS (
            LOWER(REGEXP_REPLACE(CONVERT(COALESCE(hierarchy, '') USING utf8mb4), '^[[:space:]]+|[[:space:]]+$', '')) COLLATE utf8mb4_0900_bin AS hierarchy_key
     FROM parameter_master
 ), signatures AS (
-    SELECT normalized.*,
-           CASE WHEN parameter_type='SE'
-                THEN CONCAT_WS('___',wp_key,category_key,parameter_name_key,unit_key,hierarchy_key)
-                ELSE CONCAT_WS('___',wp_key,performance_key,design_item_1_key,
-                               design_item_2_key,design_item_3_key,unit_key,hierarchy_key)
-           END COLLATE utf8mb4_0900_bin AS duplicate_key
+    SELECT normalized.*
     FROM normalized
-    WHERE (parameter_type='SE' AND parameter_name_key<>'')
-       OR (parameter_type='R' AND (performance_key<>'' OR design_item_1_key<>''
-                                  OR design_item_2_key<>'' OR design_item_3_key<>''))
 ), ranked AS (
     SELECT signatures.*,
-           COUNT(*) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_count,
-           MIN(parameter_id) OVER (PARTITION BY parameter_type,duplicate_key) AS duplicate_group_id
+           COUNT(*) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_count,
+           MIN(parameter_id) OVER (PARTITION BY parameter_type,wp_key,category_key,parameter_name_key,performance_key,design_item_1_key,design_item_2_key,design_item_3_key,unit_key,hierarchy_key) AS duplicate_group_id
     FROM signatures
 ), duplicates AS (
     SELECT * FROM ranked WHERE duplicate_count>1
 ), parameter_usage AS (
 SELECT d.parameter_type, d.duplicate_group_id, d.duplicate_count, d.parameter_id,
-       COALESCE(d.wp, 'null') AS wp, COALESCE(d.category, 'null') AS category, COALESCE(d.parameter_name, 'null') AS parameter_name, COALESCE(d.performance, 'null') AS performance,
-       COALESCE(d.design_item_1, 'null') AS design_item_1, COALESCE(d.design_item_2, 'null') AS design_item_2, COALESCE(d.design_item_3, 'null') AS design_item_3, COALESCE(d.unit, 'null') AS unit, COALESCE(d.hierarchy, 'null') AS hierarchy,
+       COALESCE(d.wp, '-') AS wp, COALESCE(d.category, '-') AS category, COALESCE(d.parameter_name, '-') AS parameter_name, COALESCE(d.performance, '-') AS performance,
+       COALESCE(d.design_item_1, '-') AS design_item_1, COALESCE(d.design_item_2, '-') AS design_item_2, COALESCE(d.design_item_3, '-') AS design_item_3, COALESCE(d.unit, '-') AS unit, COALESCE(d.hierarchy, '-') AS hierarchy,
        CASE WHEN d.parameter_type='R' THEN
            CASE WHEN EXISTS (
                SELECT 1 FROM setup_r_relation sr
